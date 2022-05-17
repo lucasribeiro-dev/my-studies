@@ -1,12 +1,15 @@
 class VideoMediaPlayer {
-    constructor(manifestJSON, network) {
+    constructor(manifestJSON, network, videoComponent) {
         console.log(manifestJSON);
         this.manifestJSON = manifestJSON;
         this.network = network;
+        this.videoComponent = videoComponent;
         this.videoElement = null;
         this.sourceBuffer = null;
+        this.activeItem = {};
         this.selected = {};
         this.videoDuration = 0;
+        this.selections = []
 
     }
     initializeCodec(){
@@ -25,7 +28,6 @@ class VideoMediaPlayer {
 
         const mediaSource = new MediaSource();
         this.videoElement.src = URL.createObjectURL(mediaSource);
-
         mediaSource.addEventListener("sourceopen", this.sourceOpenWrapper(mediaSource));
     }
 
@@ -36,13 +38,64 @@ class VideoMediaPlayer {
             //not run with LIVE
             mediaSource.duration = this.videoDuration;
             await this.fileDownload(selected.url);
+            setInterval(this.waitForQuestions.bind(this), 200)
         }
     }
 
+    waitForQuestions(){
+        const currentTime = parseInt(this.videoElement.currentTime);
+        const option = this.selected.at === currentTime;
+        if(!option) return;
+
+        //not open modal many times in the same second
+        if(this.activeItem.url === this.selected.url) return;
+
+        this.activeItem = this.selected;
+        this.videoComponent.configureModal(this.selected.options);
+    }
+
+    async currentFileResolution(){
+        const LOWEST_RESOLUTION = 144;
+        const prepareUrl = {
+            url: this.manifestJSON.finalizar.url,
+            fileResolution: LOWEST_RESOLUTION,
+            fileResolutionTag: this.manifestJSON.fileResolutionTag,
+            hostTag: this.manifestJSON.hostTag
+        }
+
+        const url = this.network.parseManifestURL(prepareUrl);
+        return this.network.getProperResolution(url);
+    }
+
+    async nextChunck(data){
+        const key = data.toLowerCase();
+        const selected = this.manifestJSON[key];
+        this.selected = {
+            ...selected,
+            at:parseInt(this.videoElement.currentTime + selected.at)
+        }
+
+        this.manageLag(this.selected);
+        this.videoElement.play();
+        await this.fileDownload(selected.url);
+         
+    }
+
+    manageLag(selected){
+        if(!!~this.selections.indexOf(selected.url)){
+            selected.at += 5
+            return;
+        }
+
+        this.selections.push(selected.url);
+    }
+
     async fileDownload(url){
+        const fileResolution = await this.currentFileResolution();
+        console.log('Current resolution: ', fileResolution);
         const prepareUrl = {
             url,
-            fileResolution:360,
+            fileResolution:fileResolution,
             fileResolutionTag: this.manifestJSON.fileResolutionTag,
             hostTag: this.manifestJSON.hostTag
         }
@@ -54,7 +107,7 @@ class VideoMediaPlayer {
     setVideoPlayerDuration(finalURL){
         const bars = finalURL.split('/');
         const [ name, videoDuration ] = bars[bars.length -1].split('-');
-        this.videoDuration += videoDuration;
+        this.videoDuration += parseFloat(videoDuration);
     }
 
 
@@ -66,11 +119,10 @@ class VideoMediaPlayer {
             const updateEnd = (_) => {
                 sourceBuffer.removeEventListener("updateend", updateEnd);
                 sourceBuffer.timestampOffset = this.videoDuration;
-
                 return resolve();
             }
 
-            sourceBuffer.addEventListener("updateend", () => {})
+            sourceBuffer.addEventListener("updateend", updateEnd)
             sourceBuffer.addEventListener("error",reject)
 
         })
